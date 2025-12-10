@@ -1,6 +1,7 @@
 import OpenAI from "openai";
-import { GradingResponse, RawAnalysisResult, FeedbackItem, PositionRect, StudentAnswer, ChatMessage } from "../types";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { GradingResponse, RawAnalysisResult, FeedbackItem, PositionRect, StudentAnswer, ChatMessage, McpTool } from "../types";
+import { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import { mcpClient } from "./mcpService";
 
 // Initialize OpenAI client compatible with DashScope
 const client = new OpenAI({
@@ -92,7 +93,7 @@ const buildApiHistory = (history: ChatMessage[]): ChatCompletionMessageParam[] =
   const apiMessages: ChatCompletionMessageParam[] = [];
 
   for (const msg of history) {
-    if (msg.isLoading || !msg.role) continue; // Skip transient UI messages
+    if (msg.isLoading) continue; // Skip transient UI messages
 
     if (msg.role === 'user') {
       const contentParts: { type: string; text?: string; image_url?: { url: string } }[] = [];
@@ -110,11 +111,29 @@ const buildApiHistory = (history: ChatMessage[]): ChatCompletionMessageParam[] =
       }
     } else if (msg.role === 'model') {
       // Use summary as text content if it's a grading result, otherwise use text.
-      // This allows the model to have context of previous grading tasks in a follow-up chat.
       const modelText = msg.gradingResult ? msg.gradingResult.summary : msg.text;
+      
+      const msgParam: any = { role: 'assistant' };
       if (modelText) {
-        apiMessages.push({ role: 'assistant', content: modelText });
+          msgParam.content = modelText;
+      } else {
+          msgParam.content = null; // Important for tool calls
       }
+
+      // Restore tool calls if they were part of the history (not strictly stored in UI types yet, but handling basic text)
+      // Note: For a robust implementation, we would need to store the raw tool_calls array in ChatMessage.
+      // Since current UI doesn't store tool_calls structure, we assume pure text history for now
+      // unless we expand ChatMessage significantly.
+      if (modelText) {
+          apiMessages.push(msgParam);
+      }
+
+    } else if (msg.role === 'tool') {
+        apiMessages.push({
+            role: 'tool',
+            tool_call_id: msg.toolCallId || '',
+            content: msg.text || ''
+        });
     }
   }
   return apiMessages;
@@ -149,12 +168,32 @@ const parseImageIndex = (val: string | number | undefined): number => {
 };
 
 /**
- * New function for general purpose chat, streaming the response.
- * Now accepts the full conversation history for context.
+ * Map MCP Tools to OpenAI Chat Completion Tools
  */
-export async function* getChatResponse(history: ChatMessage[], model: string, signal?: AbortSignal): AsyncGenerator<string> {
+const mapMcpToolsToOpenAi = (mcpTools: McpTool[]): ChatCompletionTool[] => {
+    return mcpTools.map(tool => ({
+        type: 'function',
+        function: {
+            name: tool.name,
+            description: tool.description || '',
+            parameters: tool.inputSchema || {}
+        }
+    }));
+};
+
+/**
+ * New function for general purpose chat, streaming the response.
+ * Supports MCP Tool calling recursion.
+ */
+export async function* getChatResponse(
+    history: ChatMessage[], 
+    model: string, 
+    signal?: AbortSignal,
+    mcpTools: McpTool[] = []
+): AsyncGenerator<string> {
   try {
     const apiHistory = buildApiHistory(history);
+    const tools = mcpTools.length > 0 ? mapMcpToolsToOpenAi(mcpTools) : undefined;
 
     const stream = await client.chat.completions.create({
       model: model,
@@ -174,13 +213,130 @@ export async function* getChatResponse(history: ChatMessage[], model: string, si
         ...apiHistory
       ],
       stream: true,
+      tools: tools,
     }, { signal });
 
+    let finalContent = "";
+    let toolCalls: any[] = [];
+    let currentToolIndex = -1;
+
     for await (const chunk of stream) {
-      if (chunk.choices[0]?.delta?.content) {
-        yield chunk.choices[0].delta.content;
+      const delta = chunk.choices[0]?.delta;
+
+      // Handle Content
+      if (delta?.content) {
+        finalContent += delta.content;
+        yield delta.content;
+      }
+
+      // Handle Tool Calls (Accumulation)
+      if (delta?.tool_calls) {
+         for (const tc of delta.tool_calls) {
+             if (tc.index !== currentToolIndex) {
+                 // New tool call started
+                 toolCalls.push({
+                     id: tc.id,
+                     function: {
+                         name: tc.function?.name || "",
+                         arguments: tc.function?.arguments || ""
+                     },
+                     type: 'function'
+                 });
+                 currentToolIndex = tc.index;
+             } else {
+                 // Append to existing
+                 if (tc.function?.arguments) {
+                     toolCalls[toolCalls.length - 1].function.arguments += tc.function.arguments;
+                 }
+             }
+         }
       }
     }
+
+    // --- If Tool Calls were made ---
+    if (toolCalls.length > 0) {
+        // 1. Notify UI (optional via yield, but usually handled by appending messages)
+        yield "\n\n*(正在调用外部工具...)*\n\n";
+
+        // 2. Prepare new history with the tool calls
+        const assistantMessage: any = {
+            role: 'assistant',
+            content: finalContent || null,
+            tool_calls: toolCalls
+        };
+        
+        // We need to keep track of this exchange for the next request
+        // In a real generic loop, we'd update the `history` object in the App state,
+        // but here we are inside a generator. We have to perform the recursive call here
+        // and yield its results.
+        
+        const nextHistory = [...history]; // This is local to the function, actual state update happens in App via accumulating 'text'
+        // But App only sees the text yielded. 
+        // CRITICAL: The App.tsx `setMessages` only appends the text to the *last* model message.
+        // It doesn't natively handle inserting intermediate 'tool' messages visible to the user yet.
+        // We will simulate the tool interaction by fetching the result and feeding it back to LLM immediately.
+
+        // Append the assistant's intent to call tools to context
+        apiHistory.push(assistantMessage);
+
+        for (const tc of toolCalls) {
+            const toolName = tc.function.name;
+            const argsStr = tc.function.arguments;
+            let args = {};
+            try {
+                args = JSON.parse(argsStr);
+            } catch (e) {
+                console.error("Failed to parse tool args", e);
+            }
+
+            let resultString = "";
+            try {
+                // Execute MCP Tool
+                const mcpResult = await mcpClient.callTool(toolName, args);
+                
+                // Format result for LLM
+                // MCP results usually have `content` array
+                if (mcpResult.content) {
+                    resultString = mcpResult.content.map((c: any) => c.text).join("\n");
+                } else {
+                    resultString = JSON.stringify(mcpResult);
+                }
+            } catch (err: any) {
+                resultString = `Error executing tool: ${err.message}`;
+            }
+
+            // Append Tool Result to context
+            apiHistory.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: resultString
+            });
+            
+            yield `\n> 工具 ${toolName} 返回结果。\n`;
+        }
+
+        // 3. Recursive Call with updated history
+        // We create a new stream with the updated apiHistory (Assistant Call + Tool Results)
+        const secondStream = await client.chat.completions.create({
+            model: model,
+            messages: [
+                 {
+                    role: "system",
+                    content: "你是一个得力的多模态助手。"
+                 },
+                 ...apiHistory
+            ],
+            stream: true,
+            tools: tools
+        }, { signal });
+
+        for await (const chunk of secondStream) {
+            if (chunk.choices[0]?.delta?.content) {
+                yield chunk.choices[0].delta.content;
+            }
+        }
+    }
+
   } catch (error) {
     console.error("Error getting chat response from Qwen:", error);
     if (error instanceof OpenAI.APIConnectionError) {

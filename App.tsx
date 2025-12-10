@@ -15,15 +15,20 @@ import {
   HomeIcon,
   LoginIcon,
   LogoutIcon,
-  ErrorIcon
+  ErrorIcon,
+  CheckCircleIcon,
+  ExtensionIcon,
+  LightbulbIcon,
+  SparkleIcon
 } from './components/Icon';
 import AnnotationViewer from './components/AnnotationViewer';
 import DetailView from './components/DetailView';
 import { gradeHomeworkImage, getChatResponse } from './services/geminiService';
-import { ChatMessage, GradingResponse, ChatSession } from './types';
+import { ChatMessage, GradingResponse, ChatSession, McpConnectionStatus, McpTool } from './types';
 import LatexRenderer from './components/LatexRenderer';
 // @ts-ignore
 import CryptoJS from 'crypto-js';
+import { mcpClient } from './services/mcpService';
 
 const MODELS = [
     "qwen3-vl-235b-a22b-thinking",
@@ -34,6 +39,38 @@ const MODELS = [
     "qwen3-vl-30b-a3b-instruct",
     "qwen3-vl-8b-thinking",
     "qwen3-vl-8b-instruct"
+];
+
+// --- Functional Modules Configuration ---
+const FEATURE_MODULES = [
+    {
+      id: 'grader',
+      name: '作业批改',
+      description: '智能标注与纠错',
+      icon: <CheckCircleIcon className="w-5 h-5 text-green-600" />,
+      prompt: "@grader 请帮我批改这张作业，指出错误并给出正确解法。"
+    },
+    {
+      id: 'explainer',
+      name: '题目讲解',
+      description: '详细解析解题思路',
+      icon: <LightbulbIcon className="w-5 h-5 text-yellow-600" />,
+      prompt: "请详细讲解这道题的解题思路、涉及的知识点以及具体的解题步骤。"
+    },
+    {
+      id: 'formula',
+      name: '公式转写',
+      description: '识别公式转为 LaTeX',
+      icon: <div className="w-5 h-5 flex items-center justify-center font-serif font-bold text-blue-600 italic text-lg">Σ</div>,
+      prompt: "请识别图片中的数学公式，并将其精确转写为 LaTeX 格式。"
+    },
+    {
+      id: 'general',
+      name: '自由对话',
+      description: '多模态 AI 助手',
+      icon: <SparkleIcon className="w-5 h-5" />,
+      prompt: "" // Clear input for general chat
+    }
 ];
 
 // --- Authentication Types & Logic ---
@@ -78,6 +115,8 @@ const encryptPassword = (password: string, salt: string) => {
     // Return Base64 of the ciphertext
     return encrypted.ciphertext.toString(CryptoJS.enc.Base64);
 };
+
+// --- Modals ---
 
 const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onClose: () => void, onLoginSuccess: (user: User) => void }) => {
     const [username, setUsername] = useState("");
@@ -138,10 +177,6 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
             });
 
             // 5. Check Result
-            // A successful login usually redirects to the service URL (csujwc)
-            // Even if we can't fully load the JWC page due to CORS, the URL change indicates success in a redirect flow.
-            // However, since we are fetching in background, we check the final URL.
-            
             if (postResponse.url.includes("csujwc.its.csu.edu.cn") || postResponse.ok) {
                  // Login Success Simulation
                  onLoginSuccess({
@@ -417,6 +452,12 @@ const App = () => {
   const [user, setUser] = useState<User | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
 
+  // --- MCP State ---
+  const [mcpStatus, setMcpStatus] = useState<McpConnectionStatus>('disconnected');
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
+  const [showMcpPopover, setShowMcpPopover] = useState(false);
+  const [mcpUrl, setMcpUrl] = useState("http://localhost:3000/sse");
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -430,6 +471,10 @@ const App = () => {
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
   
+  // New state for collapsible sidebar sections
+  const [isFeaturesOpen, setIsFeaturesOpen] = useState(true);
+  const [isRecentOpen, setIsRecentOpen] = useState(true);
+  
   const [detailViewData, setDetailViewData] = useState<{ images: string[], result: GradingResponse } | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>(MODELS[0]);
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
@@ -442,6 +487,7 @@ const App = () => {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mcpPopoverRef = useRef<HTMLDivElement>(null);
 
   // --- Auth & Session Management ---
 
@@ -465,6 +511,41 @@ const App = () => {
       localStorage.removeItem('csu_user');
       setAppStarted(false);
   };
+
+  // --- MCP Connection Logic ---
+  const handleConnectMcp = async (url: string) => {
+      if (!url) {
+          // Disconnect signal
+          mcpClient.disconnect();
+          setMcpStatus('disconnected');
+          setMcpTools([]);
+          return;
+      }
+
+      setMcpStatus('connecting');
+      try {
+          await mcpClient.connect(url);
+          setMcpStatus('connected');
+          const tools = await mcpClient.refreshTools();
+          setMcpTools(tools);
+      } catch (error) {
+          console.error("MCP Connection Failed", error);
+          setMcpStatus('error');
+      }
+  };
+
+  // Close MCP Popover if clicked outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (mcpPopoverRef.current && !mcpPopoverRef.current.contains(event.target as Node)) {
+        // Optional: Check if clicking the toggle button itself (to avoid immediate reopen)
+        // For now, rely on toggle button logic or just close it.
+        // We will keep it simple.
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Load sessions from localStorage on initial render
   useEffect(() => {
@@ -560,6 +641,16 @@ const App = () => {
     }
   };
 
+  // --- Feature Module Handler ---
+  const handleFeatureSelect = (prompt: string) => {
+    setInputValue(prompt);
+    // Focus input after selecting feature
+    setTimeout(() => inputRef.current?.focus(), 50);
+    // On mobile, close sidebar after selection
+    if (window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+    }
+  };
 
   // --- Sidebar Resizing Logic ---
   const startResizing = useCallback((e: React.MouseEvent) => {
@@ -734,8 +825,8 @@ const App = () => {
         // Add an empty model message to stream into
         setMessages(prev => [...prev, { role: 'model', text: '' }]);
         
-        // Pass the complete history to the chat function
-        const stream = getChatResponse(historyForApi, selectedModel, controller.signal);
+        // Pass the complete history to the chat function, including MCP tools
+        const stream = getChatResponse(historyForApi, selectedModel, controller.signal, mcpTools);
 
         for await (const chunk of stream) {
           setMessages(prev => {
@@ -779,10 +870,139 @@ const App = () => {
     }
   };
 
+  // Helper to render MCP Tool Cards
+  const renderMcpToolCard = (tool: McpTool) => {
+     // Extract keys from schema properties for display
+     const props = tool.inputSchema?.properties || {};
+     const required = tool.inputSchema?.required || [];
+     const propKeys = Object.keys(props);
+     
+     return (
+        <div key={tool.name} className="bg-white border border-gray-100 rounded-xl p-3 hover:border-blue-200 hover:shadow-md transition-all group">
+            <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    <ExtensionIcon className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                    <h4 className="text-sm font-semibold text-gray-800 truncate">{tool.name}</h4>
+                    {tool.description && <p className="text-[10px] text-gray-500 truncate">{tool.description}</p>}
+                </div>
+            </div>
+            
+            {/* Schema Visualizer */}
+            {propKeys.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                    {propKeys.slice(0, 4).map(key => (
+                        <span key={key} className={`text-[9px] px-1.5 py-0.5 rounded border font-mono ${required.includes(key) ? 'bg-red-50 text-red-600 border-red-100' : 'bg-gray-50 text-gray-500 border-gray-100'}`}>
+                            {key}{required.includes(key) ? '*' : ''}
+                        </span>
+                    ))}
+                    {propKeys.length > 4 && <span className="text-[9px] text-gray-400 self-center">+{propKeys.length - 4}</span>}
+                </div>
+            )}
+        </div>
+     );
+  };
+
   // Helper to render input area to avoid duplication
   const renderInputPanel = () => (
       <div className="relative bg-[#f0f4f9] rounded-[28px] transition-all duration-300 hover:shadow-md focus-within:shadow-lg focus-within:bg-white border border-transparent focus-within:border-[#e3e3e3]">
              
+             {/* MCP Popover - Enhanced UI */}
+             {showMcpPopover && (
+                <div 
+                    ref={mcpPopoverRef}
+                    className="absolute bottom-full left-0 mb-4 w-[30rem] bg-white/80 backdrop-blur-xl rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-white/50 p-6 animate-scale-in origin-bottom-left z-50 ring-1 ring-black/5"
+                >
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-100/50">
+                         <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white">
+                                <ExtensionIcon className="w-5 h-5" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-gray-800 tracking-tight">MCP 扩展中心</h3>
+                                <p className="text-[10px] text-gray-500">Model Context Protocol</p>
+                            </div>
+                         </div>
+                         
+                         {/* Status Indicator */}
+                         <div className={`px-3 py-1 rounded-full text-[10px] font-medium flex items-center gap-1.5 transition-colors duration-300 ${
+                             mcpStatus === 'connected' ? 'bg-green-50 text-green-700 border border-green-100' : 
+                             mcpStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-100' :
+                             mcpStatus === 'connecting' ? 'bg-yellow-50 text-yellow-700 border border-yellow-100' :
+                             'bg-gray-50 text-gray-600 border border-gray-100'
+                         }`}>
+                             <div className={`w-1.5 h-1.5 rounded-full ${
+                                 mcpStatus === 'connecting' ? 'animate-ping bg-yellow-500' : 
+                                 mcpStatus === 'connected' ? 'bg-green-500' : 
+                                 mcpStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
+                             }`} />
+                             {mcpStatus === 'connecting' ? '连接中...' : 
+                              mcpStatus === 'connected' ? '已连接' : 
+                              mcpStatus === 'error' ? '连接失败' : '未连接'}
+                         </div>
+                    </div>
+                    
+                    {/* Connection Input */}
+                    <div className="flex gap-2 mb-4">
+                        <div className="flex-1 relative group">
+                            <input 
+                                className="w-full bg-white border border-gray-200 text-xs rounded-xl pl-4 pr-4 py-2.5 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 text-gray-700 font-mono transition-all placeholder-gray-400"
+                                value={mcpUrl}
+                                onChange={(e) => setMcpUrl(e.target.value)}
+                                placeholder="输入 SSE Endpoint (e.g. localhost:3000/sse)"
+                                disabled={mcpStatus === 'connected' || mcpStatus === 'connecting'}
+                            />
+                        </div>
+                        <button 
+                            onClick={() => handleConnectMcp(mcpStatus === 'connected' ? '' : mcpUrl)}
+                            disabled={mcpStatus === 'connecting'}
+                            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all shadow-sm active:scale-95 ${
+                                mcpStatus === 'connected' 
+                                ? 'bg-white text-red-500 border border-red-100 hover:bg-red-50 hover:border-red-200' 
+                                : 'bg-[#1f1f1f] text-white hover:bg-black hover:shadow-lg disabled:opacity-70 disabled:cursor-wait'
+                            }`}
+                        >
+                            {mcpStatus === 'connected' ? '断开连接' : '立即连接'}
+                        </button>
+                    </div>
+
+                    {/* Tools Grid */}
+                    {mcpStatus === 'connected' ? (
+                        <div className="animate-slide-up-fade">
+                            <div className="flex justify-between items-center mb-2 px-1">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">可用能力 ({mcpTools.length})</span>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto custom-scrollbar p-1">
+                                {mcpTools.length === 0 ? (
+                                    <div className="col-span-2 flex flex-col items-center justify-center py-8 text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                                        <ExtensionIcon className="w-6 h-6 mb-2 opacity-20" />
+                                        <p className="text-xs">未发现可用工具</p>
+                                    </div>
+                                ) : (
+                                    mcpTools.map(tool => renderMcpToolCard(tool))
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                         /* Empty State / Guide */
+                         <div className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                            <p className="text-xs text-gray-500 leading-relaxed">
+                                连接到支持 <strong>Model Context Protocol (MCP)</strong> 的本地或远程服务器，赋予 AI 更多实时能力（如文件操作、数据库查询等）。
+                            </p>
+                            {mcpStatus === 'error' && (
+                                <div className="mt-3 text-[10px] text-red-600 bg-red-50 p-2 rounded-lg border border-red-100 text-left flex gap-2">
+                                    <ErrorIcon className="w-4 h-4 shrink-0" />
+                                    <span>连接失败。请确保服务器正在运行，且 URL 配置了允许跨域 (CORS)。</span>
+                                </div>
+                            )}
+                         </div>
+                    )}
+                </div>
+             )}
+
              {quotedMessage && (
                 <div className="px-6 pt-3 animate-slide-up-fade">
                     <div className="bg-[#e8eaed] rounded-lg px-4 py-2 flex items-center gap-3">
@@ -842,6 +1062,18 @@ const App = () => {
                   className="hidden" 
                   onChange={handleImageUpload}
                 />
+                
+                {/* MCP Toggle Button */}
+                <button 
+                    onClick={() => setShowMcpPopover(!showMcpPopover)}
+                    className={`ml-1 w-9 h-9 flex items-center justify-center rounded-full transition-all shadow-sm shrink-0 relative ${showMcpPopover || mcpStatus === 'connected' ? 'bg-[#e3f2fd] text-[#0b57d0]' : 'bg-[#f0f4f9] hover:bg-[#e3e3e3] text-[#444746]'}`}
+                    title="MCP Extension Tools"
+                >
+                   <ExtensionIcon className="w-5 h-5" />
+                   {mcpStatus === 'connected' && (
+                       <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
+                   )}
+                </button>
                 
                 <input
                   ref={inputRef}
@@ -946,25 +1178,73 @@ const App = () => {
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-3 py-2">
-                  <div className="mb-2 text-[11px] font-medium text-[#444746] px-4 opacity-80">最近</div>
-                  <div className="flex flex-col gap-1">
-                    {sessions.sort((a, b) => b.createdAt - a.createdAt).map(session => (
-                      <button 
-                        key={session.id} 
-                        onClick={() => loadSession(session.id)}
-                        className={`group flex items-center justify-between gap-3 px-4 py-2.5 rounded-full text-sm text-left truncate transition-colors w-full ${currentSessionId === session.id ? 'bg-[#dfe3e7]' : 'hover:bg-[#e1e5ea] text-[#1f1f1f]'}`}
-                      >
-                        <div className="flex items-center gap-3 truncate">
-                          <HistoryIcon className="text-[#444746] w-[18px] h-[18px]" />
-                          <span className="truncate">{session.title}</span>
+                  
+                  {/* Functional Modules Section (Collapsible) */}
+                  <div className="mb-4">
+                    <button 
+                        onClick={() => setIsFeaturesOpen(!isFeaturesOpen)}
+                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 rounded-lg transition-colors"
+                    >
+                        <span className="text-[11px] font-medium text-[#444746] opacity-80 uppercase tracking-wider">功能助手</span>
+                        <ChevronDownIcon className={`w-3 h-3 text-[#444746] opacity-60 transition-transform duration-300 ${isFeaturesOpen ? '' : '-rotate-90'}`} />
+                    </button>
+                    
+                    <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${isFeaturesOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                        <div className="overflow-hidden">
+                            <div className="flex flex-col gap-1 pb-1">
+                                {FEATURE_MODULES.map(feature => (
+                                    <button 
+                                        key={feature.id}
+                                        onClick={() => handleFeatureSelect(feature.prompt)}
+                                        className="group flex items-center gap-3 px-4 py-2.5 rounded-full text-sm text-left hover:bg-[#e1e5ea] transition-all w-full relative overflow-hidden"
+                                    >
+                                        <div className="shrink-0 transition-transform group-hover:scale-110">
+                                            {feature.icon}
+                                        </div>
+                                        <div className="flex flex-col min-w-0">
+                                            <span className="text-[#1f1f1f] font-medium truncate">{feature.name}</span>
+                                            <span className="text-[10px] text-[#444746] opacity-70 truncate">{feature.description}</span>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={(e) => deleteSession(session.id, e)} className="p-1 rounded-full hover:bg-red-200 text-red-600">
-                                <DeleteIcon className="w-4 h-4"/>
-                            </button>
+                    </div>
+                  </div>
+
+                  {/* Recent Sessions Section (Collapsible) */}
+                  <div>
+                    <button 
+                        onClick={() => setIsRecentOpen(!isRecentOpen)}
+                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 rounded-lg transition-colors"
+                    >
+                        <span className="text-[11px] font-medium text-[#444746] opacity-80 uppercase tracking-wider">最近对话</span>
+                        <ChevronDownIcon className={`w-3 h-3 text-[#444746] opacity-60 transition-transform duration-300 ${isRecentOpen ? '' : '-rotate-90'}`} />
+                    </button>
+
+                    <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${isRecentOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                        <div className="overflow-hidden">
+                            <div className="flex flex-col gap-1 pb-1">
+                                {sessions.sort((a, b) => b.createdAt - a.createdAt).map(session => (
+                                <button 
+                                    key={session.id} 
+                                    onClick={() => loadSession(session.id)}
+                                    className={`group flex items-center justify-between gap-3 px-4 py-2.5 rounded-full text-sm text-left truncate transition-colors w-full ${currentSessionId === session.id ? 'bg-[#dfe3e7]' : 'hover:bg-[#e1e5ea] text-[#1f1f1f]'}`}
+                                >
+                                    <div className="flex items-center gap-3 truncate">
+                                    <HistoryIcon className="text-[#444746] w-[18px] h-[18px]" />
+                                    <span className="truncate">{session.title}</span>
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={(e) => deleteSession(session.id, e)} className="p-1 rounded-full hover:bg-red-200 text-red-600">
+                                            <DeleteIcon className="w-4 h-4"/>
+                                        </button>
+                                    </div>
+                                </button>
+                                ))}
+                            </div>
                         </div>
-                      </button>
-                    ))}
+                    </div>
                   </div>
                 </div>
 
@@ -977,7 +1257,9 @@ const App = () => {
                      返回首页
                    </button>
 
-                   <button className="flex items-center gap-3 w-full px-2 py-2.5 hover:bg-[#e1e5ea] rounded-full text-[#1f1f1f] text-sm transition-colors mb-1">
+                   <button 
+                        className="flex items-center gap-3 w-full px-2 py-2.5 hover:bg-[#e1e5ea] rounded-full text-[#1f1f1f] text-sm transition-colors mb-1 cursor-default opacity-60"
+                   >
                     <SettingsIcon className="w-5 h-5 text-[#444746]" />
                     设置
                   </button>

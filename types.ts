@@ -6,7 +6,6 @@ export interface BoundingBox {
   ymin: number;
   xmin: number;
   ymax: number;
-  xmax: number;
 }
 
 // Existing UI Types
@@ -25,11 +24,13 @@ export interface GradingResponse {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'model';
+  role: 'user' | 'model' | 'tool'; // Added 'tool' role
   text?: string;
   images?: string[]; // Array of Base64 data URIs
   gradingResult?: GradingResponse;
   isLoading?: boolean;
+  toolCallId?: string; // For tool result messages
+  toolName?: string; // For tool result messages
 }
 
 export interface ChatSession {
@@ -103,3 +104,35 @@ export interface RawAnalysisResult {
     reference: ReferenceAnswer;
   };
 }
+
+// --- MCP Types ---
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema: {
+    type: string;
+    properties?: Record<string, any>;
+    required?: string[];
+  };
+}
+
+export interface McpJsonRpcRequest {
+  jsonrpc: "2.0";
+  id: number | string;
+  method: string;
+  params?: any;
+}
+
+export interface McpJsonRpcResponse {
+  jsonrpc: "2.0";
+  id: number | string;
+  result?: any;
+  error?: {
+    code: number;
+    message: string;
+    data?: any;
+  };
+}
+
+export type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
