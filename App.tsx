@@ -19,7 +19,9 @@ import {
   CheckCircleIcon,
   ExtensionIcon,
   LightbulbIcon,
-  SparkleIcon
+  SparkleIcon,
+  LightModeIcon,
+  DarkModeIcon
 } from './components/Icon';
 import AnnotationViewer from './components/AnnotationViewer';
 import DetailView from './components/DetailView';
@@ -47,21 +49,21 @@ const FEATURE_MODULES = [
       id: 'grader',
       name: '作业批改',
       description: '智能标注与纠错',
-      icon: <CheckCircleIcon className="w-5 h-5 text-green-600" />,
+      icon: <CheckCircleIcon className="w-5 h-5 text-green-600 dark:text-green-500" />,
       prompt: "@grader 请帮我批改这张作业，指出错误并给出正确解法。"
     },
     {
       id: 'explainer',
       name: '题目讲解',
       description: '详细解析解题思路',
-      icon: <LightbulbIcon className="w-5 h-5 text-yellow-600" />,
+      icon: <LightbulbIcon className="w-5 h-5 text-yellow-600 dark:text-yellow-500" />,
       prompt: "请详细讲解这道题的解题思路、涉及的知识点以及具体的解题步骤。"
     },
     {
       id: 'formula',
       name: '公式转写',
       description: '识别公式转为 LaTeX',
-      icon: <div className="w-5 h-5 flex items-center justify-center font-serif font-bold text-blue-600 italic text-lg">Σ</div>,
+      icon: <div className="w-5 h-5 flex items-center justify-center font-serif font-bold text-blue-600 dark:text-blue-500 italic text-lg">Σ</div>,
       prompt: "请识别图片中的数学公式，并将其精确转写为 LaTeX 格式。"
     },
     {
@@ -84,37 +86,35 @@ const CAS_LOGIN_URL = "https://ca.csu.edu.cn/authserver/login";
 // Using the service URL provided in your example code that is known to work with CAS
 const CAS_SERVICE_URL = "http://csujwc.its.csu.edu.cn/sso.jsp";
 
-// Ported from your Node.js example code to Browser JS using CryptoJS
-const encryptPassword = (password: string, salt: string) => {
-    const aesCharSet = "ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678";
-    const randomString = (length: number) => {
-        let out = "";
-        for (let i = 0; i < length; i++) {
-             out += aesCharSet[Math.floor(Math.random() * aesCharSet.length)];
-        }
-        return out;
-    };
+// --- Encryption Helpers matching encrypt.js ---
+const aesCharSet = "ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678";
 
-    const prefix = randomString(64);
-    const ivStr = randomString(16);
+const randomString = (length: number) => {
+    let out = "";
+    for (let i = 0; i < length; i++) {
+            out += aesCharSet[Math.floor(Math.random() * aesCharSet.length)];
+    }
+    return out;
+};
+
+const getAesString = (data: string, key: string, iv: string) => {
+    // Trim key whitespace as per js implementation
+    const keyTrimmed = key.replace(/(^\s+)|(\s+$)/g, "");
+    const keyParsed = CryptoJS.enc.Utf8.parse(keyTrimmed);
+    const ivParsed = CryptoJS.enc.Utf8.parse(iv);
     
-    // Convert strings to WordArrays for CryptoJS
-    const key = CryptoJS.enc.Utf8.parse(salt);
-    const iv = CryptoJS.enc.Utf8.parse(ivStr);
-    
-    // Logic: prefix(64 chars) + password
-    // Then PKCS7 padded (handled by CryptoJS default)
-    const src = CryptoJS.enc.Utf8.parse(prefix + password);
-    
-    const encrypted = CryptoJS.AES.encrypt(src, key, {
-        iv: iv,
+    const encrypted = CryptoJS.AES.encrypt(data, keyParsed, {
+        iv: ivParsed,
         mode: CryptoJS.mode.CBC,
         padding: CryptoJS.pad.Pkcs7
     });
-    
-    // Return Base64 of the ciphertext
-    return encrypted.ciphertext.toString(CryptoJS.enc.Base64);
+    return encrypted.toString();
 };
+
+const encryptPassword = (password: string, salt: string) => {
+    return getAesString(randomString(64) + password, salt, randomString(16));
+};
+
 
 // --- Modals ---
 
@@ -133,41 +133,68 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
 
         try {
             // 1. Fetch the login page to get execution token and salt
-            const loginPageUrl = `${CAS_LOGIN_URL}?service=${encodeURIComponent(CAS_SERVICE_URL)}`;
+            // Browser automatically follows redirects, so this gets us the final login page content
+            const loginPageInitialUrl = `${CAS_LOGIN_URL}?service=${encodeURIComponent(CAS_SERVICE_URL)}`;
             
-            // NOTE: This request will fail if the browser enforces CORS and the server doesn't allow it.
-            // This code assumes the user is running in an environment that permits this (e.g. proxy, extension, or same-origin).
-            const response = await fetch(loginPageUrl);
+            console.log("Fetching login page:", loginPageInitialUrl);
+            const response = await fetch(loginPageInitialUrl, {
+                redirect: 'follow'
+            });
+            
+            // Capture the actual URL after redirects (needed for POST action usually)
+            const finalLoginUrl = response.url;
+            console.log("Final login page URL:", finalLoginUrl);
+
             const html = await response.text();
             
             // 2. Parse HTML
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, "text/html");
             
-            const lt = (doc.querySelector("input[name=lt]") as HTMLInputElement)?.value;
-            const execution = (doc.querySelector("input[name=execution]") as HTMLInputElement)?.value;
-            const eventId = (doc.querySelector("input[name=_eventId]") as HTMLInputElement)?.value || "submit";
-            const salt = (doc.querySelector("#pwdEncryptSalt") as HTMLInputElement)?.value;
+            const ltInput = doc.querySelector("input[name=lt]") as HTMLInputElement;
+            const executionInput = doc.querySelector("input[name=execution]") as HTMLInputElement;
+            const eventIdInput = doc.querySelector("input[name=_eventId]") as HTMLInputElement;
+            const saltInput = doc.querySelector("#pwdEncryptSalt") as HTMLInputElement;
 
-            if (!salt || !execution || !lt) {
-                throw new Error("无法解析登录页面，请检查网络连接。");
+            const lt = ltInput?.value || "";
+            const execution = executionInput?.value || "";
+            const eventId = eventIdInput?.value || "submit";
+            const salt = saltInput?.value || "";
+
+            console.log("Login Parameters Found:", {
+                lt: lt,
+                execution: execution,
+                eventId: eventId,
+                salt: salt,
+                saltElementFound: !!saltInput
+            });
+
+            // Relaxed check: LT is optional as per user feedback
+            if (!salt || !execution) {
+                // If critical parameters are missing, log the error details
+                throw new Error(`无法解析登录页面参数。已获取: Salt=${!!salt}, Execution=${!!execution}, LT=${!!lt}。请检查控制台日志详情。`);
             }
 
             // 3. Encrypt Password
             const encryptedPwd = encryptPassword(password, salt);
+            console.log("Password encrypted successfully.");
 
             // 4. Submit Form
             const formData = new URLSearchParams();
             formData.append("username", username);
             formData.append("password", encryptedPwd);
-            formData.append("lt", lt);
+            // Append lt if it exists, CAS usually expects it if present in form
+            if (lt) formData.append("lt", lt);
             formData.append("execution", execution);
             formData.append("_eventId", eventId);
             formData.append("cllt", "userNameLogin");
             formData.append("dllt", "generalLogin");
-            formData.append("captchaResponse", ""); // Sometimes needed
+            formData.append("captchaResponse", ""); 
 
-            const postResponse = await fetch(loginPageUrl, {
+            console.log("Posting login data to:", finalLoginUrl);
+
+            // Post to the same URL we landed on (finalLoginUrl)
+            const postResponse = await fetch(finalLoginUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/x-www-form-urlencoded",
@@ -176,24 +203,63 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
                 redirect: 'follow' 
             });
 
+            console.log("Login POST Response:", postResponse.status, postResponse.url);
+
             // 5. Check Result
-            if (postResponse.url.includes("csujwc.its.csu.edu.cn") || postResponse.ok) {
-                 // Login Success Simulation
+            // If redirect matches successful pattern (contains ticket or lands on service URL)
+            const successUrlPattern = "ticket=";
+            const serviceDomain = "csujwc.its.csu.edu.cn";
+            
+            if (postResponse.url.includes(successUrlPattern) || postResponse.url.includes(serviceDomain)) {
+                 console.log("Login success detected via URL match.");
+                 
+                 // Extract Student Name from the final page content
+                 let displayName = `CSU同学 ${username}`;
+                 try {
+                     const responseHtml = await postResponse.text();
+                     
+                     // Use specific Regex logic provided by user
+                     const re = /<div\s+class=["']dataHeader["'][^>]*>[\s\S]*?<font[^>]*size=["']?4["']?[^>]*>([^<]+)<\/font>/i;
+                     const match = re.exec(responseHtml);
+                     
+                     if (match && match[1]) {
+                         displayName = match[1].trim();
+                         console.log("Successfully extracted student name using regex:", displayName);
+                     } else {
+                         console.warn("Regex did not find name, attempting DOM fallback...");
+                         // Fallback DOM extraction
+                         const parser = new DOMParser();
+                         const doc = parser.parseFromString(responseHtml, "text/html");
+                         const nameElement = doc.querySelector('font[size="4"]');
+                         if (nameElement && nameElement.textContent) {
+                            displayName = nameElement.textContent.trim();
+                            console.log("Successfully extracted student name using DOM:", displayName);
+                         }
+                     }
+                 } catch (e) {
+                     console.warn("Failed to parse student name from response:", e);
+                 }
+
                  onLoginSuccess({
                      id: username,
-                     name: `CSU同学 ${username}`,
+                     name: displayName,
                      isAuthenticated: true
                  });
                  onClose();
             } else {
-                 throw new Error("登录失败，请检查账号密码。");
+                 console.warn("Login failed. URL remained:", postResponse.url);
+                 // Check if it's still the login page (likely authentication failure)
+                 if (postResponse.url.includes("authserver/login")) {
+                     throw new Error("登录失败，账号或密码错误。");
+                 }
+                 throw new Error("登录失败，未检测到 ticket 跳转。请检查网络或账号状态。");
             }
 
         } catch (err: any) {
-            console.error("Login error:", err);
+            console.error("Login error detected:", err);
             let msg = "登录请求失败。";
             if (err.message && err.message.includes("Failed to fetch")) {
-                msg = "网络请求被浏览器拦截 (CORS)。这是一个纯前端应用，无法直接访问 CSU 服务器。请尝试使用浏览器插件解决跨域问题，或使用本地代理。";
+                msg = "网络请求失败 (CORS)。这是一个纯前端应用，无法直接访问 CSU 服务器。请尝试使用浏览器插件解决跨域问题。";
             } else if (err.message) {
                 msg = err.message;
             }
@@ -206,21 +272,21 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative bg-white rounded-2xl w-full max-w-md p-8 shadow-2xl animate-scale-in">
-                <button onClick={onClose} className="absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-full text-gray-500">
+            <div className="relative bg-[var(--bg-main)] dark:bg-[var(--bg-selected)] rounded-2xl w-full max-w-md p-8 shadow-2xl animate-scale-in">
+                <button onClick={onClose} className="absolute top-4 right-4 p-2 hover:bg-[var(--bg-sub)] rounded-full text-[var(--text-sub)]">
                     <CloseIcon className="w-5 h-5" />
                 </button>
                 
                 <div className="flex flex-col items-center mb-6">
-                    <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mb-3">
+                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-200 mb-3">
                         <LoginIcon className="w-6 h-6" />
                     </div>
-                    <h2 className="text-2xl font-bold text-[#1f1f1f]">统一身份认证</h2>
-                    <p className="text-sm text-gray-500 mt-1">请使用 CSU 门户账号登录</p>
+                    <h2 className="text-2xl font-bold text-[var(--text-main)]">统一身份认证</h2>
+                    <p className="text-sm text-[var(--text-sub)] mt-1">请使用 CSU 门户账号登录</p>
                 </div>
 
                 {error && (
-                    <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-lg flex items-start gap-2 text-sm text-red-600">
+                    <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-lg flex items-start gap-2 text-sm text-red-600 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
                         <ErrorIcon className="w-5 h-5 shrink-0 mt-0.5" />
                         <span>{error}</span>
                     </div>
@@ -228,24 +294,24 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-4">
                     <div>
-                        <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">学号 / 工号</label>
+                        <label className="block text-xs font-bold text-[var(--text-sub)] uppercase mb-1.5 ml-1">学号 / 工号</label>
                         <input 
                             type="text" 
                             value={username}
                             onChange={e => setUsername(e.target.value)}
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-medium"
+                            className="w-full px-4 py-3 bg-[var(--bg-sub)] border border-[var(--border-main)] rounded-xl focus:bg-[var(--bg-main)] focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-medium text-[var(--text-main)] dark:focus:bg-[var(--bg-selected)] dark:focus:ring-blue-800"
                             placeholder="请输入账号"
                             required
                         />
                     </div>
                     
                     <div>
-                        <label className="block text-xs font-bold text-gray-700 uppercase mb-1.5 ml-1">密码</label>
+                        <label className="block text-xs font-bold text-[var(--text-sub)] uppercase mb-1.5 ml-1">密码</label>
                         <input 
                             type="password" 
                             value={password}
                             onChange={e => setPassword(e.target.value)}
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-medium"
+                            className="w-full px-4 py-3 bg-[var(--bg-sub)] border border-[var(--border-main)] rounded-xl focus:bg-[var(--bg-main)] focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-medium text-[var(--text-main)] dark:focus:bg-[var(--bg-selected)] dark:focus:ring-blue-800"
                             placeholder="请输入密码"
                             required
                         />
@@ -254,7 +320,7 @@ const LoginModal = ({ isOpen, onClose, onLoginSuccess }: { isOpen: boolean, onCl
                     <button 
                         type="submit" 
                         disabled={loading}
-                        className="mt-4 w-full py-3 bg-[#0052CC] hover:bg-[#0047B3] text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-200 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        className="mt-4 w-full py-3 bg-[#0052CC] hover:bg-[#0047B3] text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-200 dark:shadow-blue-900/20 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                         {loading ? (
                             <>
@@ -280,7 +346,7 @@ const ThinkingBlock = ({ thinking }: { thinking: string }) => {
     <div className="mb-4 animate-slide-up-fade">
       <button 
         onClick={() => setIsOpen(!isOpen)} 
-        className="flex items-center gap-2 text-sm text-[#444746] bg-[#f0f4f9] px-3 py-2 rounded-lg hover:bg-[#e1e5ea] transition-colors select-none"
+        className="flex items-center gap-2 text-sm text-[var(--text-sub)] bg-[var(--bg-sub)] px-3 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors select-none"
       >
         <GoogleDotsIcon className="w-4 h-4" />
         <span className="font-medium text-xs">思考过程</span>
@@ -289,7 +355,7 @@ const ThinkingBlock = ({ thinking }: { thinking: string }) => {
         </div>
       </button>
       {isOpen && (
-        <div className="mt-2 pl-3 ml-1 border-l-2 border-[#e3e3e3] text-[#444746] text-sm leading-relaxed whitespace-pre-wrap animate-slide-up-fade">
+        <div className="mt-2 pl-3 ml-1 border-l-2 border-[var(--border-main)] text-[var(--text-sub)] text-sm leading-relaxed whitespace-pre-wrap animate-slide-up-fade">
            <LatexRenderer>{thinking}</LatexRenderer>
         </div>
       )}
@@ -424,9 +490,17 @@ const InteractiveParticles = () => {
   return <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none opacity-50" />;
 };
 
-const EntryPage = ({ onStart, onLogin }: { onStart: () => void, onLogin: () => void }) => {
+const EntryPage = ({ onStart, onLogin, darkMode, toggleTheme }: { onStart: () => void, onLogin: () => void, darkMode: boolean, toggleTheme: () => void }) => {
   return (
     <div className="entry-page-bg">
+      <button 
+          onClick={toggleTheme}
+          className="absolute top-6 right-6 p-3 rounded-full bg-[var(--bg-sub)] text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-all z-50 shadow-sm animate-scale-in"
+          title={darkMode ? "切换亮色模式" : "切换暗色模式"}
+      >
+          {darkMode ? <LightModeIcon className="w-6 h-6" /> : <DarkModeIcon className="w-6 h-6" />}
+      </button>
+
       <InteractiveParticles />
       <div className="relative z-10 p-8 flex flex-col items-center">
         <h1 className="entry-title">MechTeachLearnCenter</h1>
@@ -438,7 +512,7 @@ const EntryPage = ({ onStart, onLogin }: { onStart: () => void, onLogin: () => v
                <LoginIcon className="w-5 h-5" />
                CSU 统一身份认证登录
             </button>
-            <button onClick={onStart} className="text-[#444746] hover:text-black font-medium text-sm transition-colors py-2 px-4 rounded-full hover:bg-black/5 flex items-center gap-2">
+            <button onClick={onStart} className="text-[var(--text-sub)] hover:text-[var(--text-main)] font-medium text-sm transition-colors py-2 px-4 rounded-full hover:bg-[var(--bg-sub)] flex items-center gap-2">
               游客试用
             </button>
         </div>
@@ -451,11 +525,12 @@ const App = () => {
   const [appStarted, setAppStarted] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
 
   // --- MCP State ---
   const [mcpStatus, setMcpStatus] = useState<McpConnectionStatus>('disconnected');
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
-  const [showMcpPopover, setShowMcpPopover] = useState(false);
+  const [isMcpSidebarOpen, setIsMcpSidebarOpen] = useState(false); // New state for sidebar
   const [mcpUrl, setMcpUrl] = useState("http://localhost:3000/sse");
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -487,18 +562,39 @@ const App = () => {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const mcpPopoverRef = useRef<HTMLDivElement>(null);
 
-  // --- Auth & Session Management ---
+  // --- Auth & Session & Theme Management ---
 
   useEffect(() => {
-    // Check if user is already logged in via localStorage
     const storedUser = localStorage.getItem('csu_user');
     if (storedUser) {
         setUser(JSON.parse(storedUser));
-        setAppStarted(true); // Auto enter if logged in
+        setAppStarted(true); 
+    }
+    
+    // Theme Init
+    const savedTheme = localStorage.getItem('theme');
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (savedTheme === 'dark' || (!savedTheme && systemPrefersDark)) {
+        setDarkMode(true);
+        document.documentElement.classList.add('dark');
+    } else {
+        setDarkMode(false);
+        document.documentElement.classList.remove('dark');
     }
   }, []);
+  
+  const toggleTheme = () => {
+      const newMode = !darkMode;
+      setDarkMode(newMode);
+      if (newMode) {
+          document.documentElement.classList.add('dark');
+          localStorage.setItem('theme', 'dark');
+      } else {
+          document.documentElement.classList.remove('dark');
+          localStorage.setItem('theme', 'light');
+      }
+  };
 
   const handleLoginSuccess = (loggedInUser: User) => {
       setUser(loggedInUser);
@@ -533,19 +629,6 @@ const App = () => {
           setMcpStatus('error');
       }
   };
-
-  // Close MCP Popover if clicked outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (mcpPopoverRef.current && !mcpPopoverRef.current.contains(event.target as Node)) {
-        // Optional: Check if clicking the toggle button itself (to avoid immediate reopen)
-        // For now, rely on toggle button logic or just close it.
-        // We will keep it simple.
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
 
   // Load sessions from localStorage on initial render
   useEffect(() => {
@@ -878,14 +961,14 @@ const App = () => {
      const propKeys = Object.keys(props);
      
      return (
-        <div key={tool.name} className="bg-white border border-gray-100 rounded-xl p-3 hover:border-blue-200 hover:shadow-md transition-all group">
+        <div key={tool.name} className="bg-[var(--bg-main)] border border-[var(--border-main)] rounded-xl p-3 hover:border-blue-200 hover:shadow-md transition-all group">
             <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-200 flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-colors">
                     <ExtensionIcon className="w-4 h-4" />
                 </div>
-                <div className="min-w-0">
-                    <h4 className="text-sm font-semibold text-gray-800 truncate">{tool.name}</h4>
-                    {tool.description && <p className="text-[10px] text-gray-500 truncate">{tool.description}</p>}
+                <div className="min-w-0 flex-1">
+                    <h4 className="text-sm font-semibold text-[var(--text-main)] truncate">{tool.name}</h4>
+                    {tool.description && <p className="text-[10px] text-[var(--text-sub)] truncate">{tool.description}</p>}
                 </div>
             </div>
             
@@ -893,11 +976,11 @@ const App = () => {
             {propKeys.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-2">
                     {propKeys.slice(0, 4).map(key => (
-                        <span key={key} className={`text-[9px] px-1.5 py-0.5 rounded border font-mono ${required.includes(key) ? 'bg-red-50 text-red-600 border-red-100' : 'bg-gray-50 text-gray-500 border-gray-100'}`}>
+                        <span key={key} className={`text-[9px] px-1.5 py-0.5 rounded border font-mono ${required.includes(key) ? 'bg-red-50 text-red-600 border-red-100 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300' : 'bg-[var(--bg-sub)] text-[var(--text-sub)] border-[var(--border-main)]'}`}>
                             {key}{required.includes(key) ? '*' : ''}
                         </span>
                     ))}
-                    {propKeys.length > 4 && <span className="text-[9px] text-gray-400 self-center">+{propKeys.length - 4}</span>}
+                    {propKeys.length > 4 && <span className="text-[9px] text-[var(--text-sub)] self-center">+{propKeys.length - 4}</span>}
                 </div>
             )}
         </div>
@@ -906,113 +989,18 @@ const App = () => {
 
   // Helper to render input area to avoid duplication
   const renderInputPanel = () => (
-      <div className="relative bg-[#f0f4f9] rounded-[28px] transition-all duration-300 hover:shadow-md focus-within:shadow-lg focus-within:bg-white border border-transparent focus-within:border-[#e3e3e3]">
+      <div className="relative bg-[var(--bg-sub)] rounded-[28px] transition-all duration-300 hover:shadow-md focus-within:shadow-lg focus-within:bg-[var(--bg-main)] border border-transparent focus-within:border-[var(--border-main)]">
              
-             {/* MCP Popover - Enhanced UI */}
-             {showMcpPopover && (
-                <div 
-                    ref={mcpPopoverRef}
-                    className="absolute bottom-full left-0 mb-4 w-[30rem] bg-white/80 backdrop-blur-xl rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-white/50 p-6 animate-scale-in origin-bottom-left z-50 ring-1 ring-black/5"
-                >
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-100/50">
-                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white">
-                                <ExtensionIcon className="w-5 h-5" />
-                            </div>
-                            <div>
-                                <h3 className="text-sm font-bold text-gray-800 tracking-tight">MCP 扩展中心</h3>
-                                <p className="text-[10px] text-gray-500">Model Context Protocol</p>
-                            </div>
-                         </div>
-                         
-                         {/* Status Indicator */}
-                         <div className={`px-3 py-1 rounded-full text-[10px] font-medium flex items-center gap-1.5 transition-colors duration-300 ${
-                             mcpStatus === 'connected' ? 'bg-green-50 text-green-700 border border-green-100' : 
-                             mcpStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-100' :
-                             mcpStatus === 'connecting' ? 'bg-yellow-50 text-yellow-700 border border-yellow-100' :
-                             'bg-gray-50 text-gray-600 border border-gray-100'
-                         }`}>
-                             <div className={`w-1.5 h-1.5 rounded-full ${
-                                 mcpStatus === 'connecting' ? 'animate-ping bg-yellow-500' : 
-                                 mcpStatus === 'connected' ? 'bg-green-500' : 
-                                 mcpStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-                             }`} />
-                             {mcpStatus === 'connecting' ? '连接中...' : 
-                              mcpStatus === 'connected' ? '已连接' : 
-                              mcpStatus === 'error' ? '连接失败' : '未连接'}
-                         </div>
-                    </div>
-                    
-                    {/* Connection Input */}
-                    <div className="flex gap-2 mb-4">
-                        <div className="flex-1 relative group">
-                            <input 
-                                className="w-full bg-white border border-gray-200 text-xs rounded-xl pl-4 pr-4 py-2.5 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 text-gray-700 font-mono transition-all placeholder-gray-400"
-                                value={mcpUrl}
-                                onChange={(e) => setMcpUrl(e.target.value)}
-                                placeholder="输入 SSE Endpoint (e.g. localhost:3000/sse)"
-                                disabled={mcpStatus === 'connected' || mcpStatus === 'connecting'}
-                            />
-                        </div>
-                        <button 
-                            onClick={() => handleConnectMcp(mcpStatus === 'connected' ? '' : mcpUrl)}
-                            disabled={mcpStatus === 'connecting'}
-                            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all shadow-sm active:scale-95 ${
-                                mcpStatus === 'connected' 
-                                ? 'bg-white text-red-500 border border-red-100 hover:bg-red-50 hover:border-red-200' 
-                                : 'bg-[#1f1f1f] text-white hover:bg-black hover:shadow-lg disabled:opacity-70 disabled:cursor-wait'
-                            }`}
-                        >
-                            {mcpStatus === 'connected' ? '断开连接' : '立即连接'}
-                        </button>
-                    </div>
-
-                    {/* Tools Grid */}
-                    {mcpStatus === 'connected' ? (
-                        <div className="animate-slide-up-fade">
-                            <div className="flex justify-between items-center mb-2 px-1">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">可用能力 ({mcpTools.length})</span>
-                            </div>
-                            
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto custom-scrollbar p-1">
-                                {mcpTools.length === 0 ? (
-                                    <div className="col-span-2 flex flex-col items-center justify-center py-8 text-gray-400 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                                        <ExtensionIcon className="w-6 h-6 mb-2 opacity-20" />
-                                        <p className="text-xs">未发现可用工具</p>
-                                    </div>
-                                ) : (
-                                    mcpTools.map(tool => renderMcpToolCard(tool))
-                                )}
-                            </div>
-                        </div>
-                    ) : (
-                         /* Empty State / Guide */
-                         <div className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                            <p className="text-xs text-gray-500 leading-relaxed">
-                                连接到支持 <strong>Model Context Protocol (MCP)</strong> 的本地或远程服务器，赋予 AI 更多实时能力（如文件操作、数据库查询等）。
-                            </p>
-                            {mcpStatus === 'error' && (
-                                <div className="mt-3 text-[10px] text-red-600 bg-red-50 p-2 rounded-lg border border-red-100 text-left flex gap-2">
-                                    <ErrorIcon className="w-4 h-4 shrink-0" />
-                                    <span>连接失败。请确保服务器正在运行，且 URL 配置了允许跨域 (CORS)。</span>
-                                </div>
-                            )}
-                         </div>
-                    )}
-                </div>
-             )}
-
              {quotedMessage && (
                 <div className="px-6 pt-3 animate-slide-up-fade">
-                    <div className="bg-[#e8eaed] rounded-lg px-4 py-2 flex items-center gap-3">
-                        <ReplyIcon className="w-5 h-5 text-[#444746] shrink-0" />
-                        <p className="text-sm text-[#3c4043] truncate flex-1 italic">
+                    <div className="bg-[#e8eaed] dark:bg-[#333537] rounded-lg px-4 py-2 flex items-center gap-3">
+                        <ReplyIcon className="w-5 h-5 text-[var(--text-sub)] shrink-0" />
+                        <p className="text-sm text-[var(--text-main)] truncate flex-1 italic">
                             {quotedMessage.text}
                         </p>
                         <button 
                             onClick={() => setQuotedMessage(null)} 
-                            className="p-1.5 text-[#5f6368] hover:bg-gray-300/70 rounded-full transition-colors"
+                            className="p-1.5 text-[var(--text-sub)] hover:bg-[var(--bg-hover)] rounded-full transition-colors"
                         >
                             <CloseIcon className="w-4 h-4" />
                         </button>
@@ -1024,12 +1012,12 @@ const App = () => {
                 <div className="px-6 pt-4 animate-slide-up-fade flex gap-3 overflow-x-auto">
                     {selectedImages.map((img, index) => (
                         <div key={index} className="relative inline-block shrink-0">
-                            <img src={img} alt={`Selected ${index}`} className="h-14 w-14 object-cover rounded-lg border border-[#e3e3e3]" />
+                            <img src={img} alt={`Selected ${index}`} className="h-14 w-14 object-cover rounded-lg border border-[var(--border-main)]" />
                             <button 
                                 onClick={() => removeSelectedImage(index)}
-                                className="absolute -top-2 -right-2 bg-[#1f1f1f] text-white rounded-full p-1 hover:bg-black shadow-md transition-transform hover:scale-110"
+                                className="absolute -top-2 -right-2 bg-[#1f1f1f] text-white rounded-full p-1 hover:bg-black shadow-md transition-transform hover:scale-110 dark:bg-[#e3e3e3] dark:text-black"
                             >
-                                <CloseIcon className="w-[10px] h-[10px] text-white" />
+                                <CloseIcon className="w-[10px] h-[10px] text-white dark:text-black" />
                             </button>
                         </div>
                     ))}
@@ -1038,9 +1026,9 @@ const App = () => {
 
             {/* --- Formula Preview --- */}
             {inputValue.includes('$') && (
-              <div className="px-6 pt-3 border-t border-[#e3e3e3] animate-slide-up-fade">
-                  <div className="bg-white p-3 rounded-lg shadow-inner-sm">
-                      <label className="text-xs font-bold text-[#444746] block mb-1 opacity-70">公式预览</label>
+              <div className="px-6 pt-3 border-t border-[var(--border-main)] animate-slide-up-fade">
+                  <div className="bg-[var(--bg-main)] p-3 rounded-lg shadow-inner-sm">
+                      <label className="text-xs font-bold text-[var(--text-sub)] block mb-1 opacity-70">公式预览</label>
                       <LatexRenderer>{inputValue || "..."}</LatexRenderer>
                   </div>
               </div>
@@ -1049,10 +1037,10 @@ const App = () => {
              <div className="flex items-center px-2 py-2 gap-2">
                 <button 
                   onClick={() => fileInputRef.current?.click()}
-                  className="ml-2 w-9 h-9 flex items-center justify-center rounded-full bg-[#1f1f1f] hover:bg-black transition-all shadow-sm shrink-0"
+                  className="ml-2 w-9 h-9 flex items-center justify-center rounded-full bg-[#1f1f1f] hover:bg-black transition-all shadow-sm shrink-0 dark:bg-[#e3e3e3] dark:hover:bg-white"
                   title="Upload image"
                 >
-                  <PlusIcon className="text-white w-5 h-5" />
+                  <PlusIcon className="text-white w-5 h-5 dark:text-black" />
                 </button>
                 <input 
                   type="file" 
@@ -1063,15 +1051,15 @@ const App = () => {
                   onChange={handleImageUpload}
                 />
                 
-                {/* MCP Toggle Button */}
+                {/* MCP Toggle Button - Now Toggles Sidebar */}
                 <button 
-                    onClick={() => setShowMcpPopover(!showMcpPopover)}
-                    className={`ml-1 w-9 h-9 flex items-center justify-center rounded-full transition-all shadow-sm shrink-0 relative ${showMcpPopover || mcpStatus === 'connected' ? 'bg-[#e3f2fd] text-[#0b57d0]' : 'bg-[#f0f4f9] hover:bg-[#e3e3e3] text-[#444746]'}`}
+                    onClick={() => setIsMcpSidebarOpen(true)}
+                    className={`ml-1 w-9 h-9 flex items-center justify-center rounded-full transition-all shadow-sm shrink-0 relative ${isMcpSidebarOpen || mcpStatus === 'connected' ? 'bg-[#e3f2fd] text-[#0b57d0] dark:bg-blue-900/30 dark:text-blue-300' : 'bg-[var(--bg-sub)] hover:bg-[var(--bg-hover)] text-[var(--text-sub)]'}`}
                     title="MCP Extension Tools"
                 >
                    <ExtensionIcon className="w-5 h-5" />
                    {mcpStatus === 'connected' && (
-                       <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
+                       <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-[#1e1f20] rounded-full"></span>
                    )}
                 </button>
                 
@@ -1082,7 +1070,7 @@ const App = () => {
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="输入 @grader 批改作业，或直接开始对话..."
-                  className="flex-1 bg-transparent border-none outline-none text-[#1f1f1f] placeholder-[#747775] text-[16px] ml-2 h-12"
+                  className="flex-1 bg-transparent border-none outline-none text-[var(--text-main)] placeholder-[var(--input-placeholder)] text-[16px] ml-2 h-12"
                   disabled={isProcessing}
                 />
                 
@@ -1090,7 +1078,7 @@ const App = () => {
                     {(isProcessing || isStreaming) ? (
                         <button 
                             onClick={handleStop}
-                            className="p-3 text-[#1f1f1f] hover:bg-[#dfe3e7] rounded-full transition-colors animate-scale-in"
+                            className="p-3 text-[var(--text-main)] hover:bg-[var(--bg-hover)] rounded-full transition-colors animate-scale-in"
                             title="Stop generation"
                         >
                            <StopIcon className="w-6 h-6" />
@@ -1098,12 +1086,12 @@ const App = () => {
                     ) : inputValue || selectedImages.length > 0 ? (
                         <button 
                           onClick={handleSendMessage}
-                          className="p-3 text-[#1f1f1f] hover:bg-[#dfe3e7] rounded-full transition-all animate-scale-in"
+                          className="p-3 text-[var(--text-main)] hover:bg-[var(--bg-hover)] rounded-full transition-all animate-scale-in"
                         >
                           <SendIcon className="w-6 h-6" />
                         </button>
                     ) : (
-                        <button className="p-3 text-[#1f1f1f] hover:bg-[#dfe3e7] rounded-full transition-colors">
+                        <button className="p-3 text-[var(--text-main)] hover:bg-[var(--bg-hover)] rounded-full transition-colors">
                            <MicIcon className="w-6 h-6" />
                         </button>
                     )}
@@ -1124,7 +1112,7 @@ const App = () => {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-white text-[#1f1f1f] font-sans">
+    <div className="flex h-screen w-full overflow-hidden bg-[var(--bg-main)] text-[var(--text-main)] font-sans transition-colors duration-300 relative">
       
       {/* Login Modal */}
       <LoginModal 
@@ -1138,6 +1126,8 @@ const App = () => {
         <EntryPage 
             onStart={() => setAppStarted(true)} 
             onLogin={() => setShowLoginModal(true)} 
+            darkMode={darkMode}
+            toggleTheme={toggleTheme}
         />
       )}
       
@@ -1148,9 +1138,9 @@ const App = () => {
             ref={sidebarRef}
             style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties} 
             className={`
-                fixed md:relative z-50
+                fixed md:relative z-40
                 flex flex-col h-full 
-                bg-[#f0f4f9] 
+                bg-[var(--bg-sub)] 
                 transition-all duration-300 ease-in-out
                 overflow-hidden
                 ${isSidebarOpen 
@@ -1162,7 +1152,7 @@ const App = () => {
             {/* Inner container with fixed width to prevent content reflow during width transition */}
             <div className="w-[var(--sidebar-width)] min-w-[240px] flex flex-col h-full">
                 <div className="p-4 pt-6 flex items-center justify-between">
-                  <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-[#dfe3e7] rounded-full text-[#444746] transition-colors">
+                  <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-[var(--bg-hover)] rounded-full text-[var(--text-sub)] transition-colors">
                     <MenuIcon className="w-6 h-6" />
                   </button>
                 </div>
@@ -1170,9 +1160,9 @@ const App = () => {
                 <div className="px-4 py-4">
                   <button 
                     onClick={createNewChat}
-                    className="flex items-center gap-3 w-full px-4 py-3 bg-[#e3e3e3] hover:bg-[#d1d5db] hover:shadow-sm text-[#1f1f1f] rounded-[16px] transition-all duration-200 group"
+                    className="flex items-center gap-3 w-full px-4 py-3 bg-[var(--bg-selected)] hover:bg-[var(--bg-hover)] hover:shadow-sm text-[var(--text-main)] rounded-[16px] transition-all duration-200 group"
                   >
-                    <PlusIcon className="w-5 h-5 text-[#444746] group-hover:text-black" />
+                    <PlusIcon className="w-5 h-5 text-[var(--text-sub)] group-hover:text-[var(--text-main)]" />
                     <span className="text-sm font-medium">新对话</span>
                   </button>
                 </div>
@@ -1183,10 +1173,10 @@ const App = () => {
                   <div className="mb-4">
                     <button 
                         onClick={() => setIsFeaturesOpen(!isFeaturesOpen)}
-                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 rounded-lg transition-colors"
+                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition-colors"
                     >
-                        <span className="text-[11px] font-medium text-[#444746] opacity-80 uppercase tracking-wider">功能助手</span>
-                        <ChevronDownIcon className={`w-3 h-3 text-[#444746] opacity-60 transition-transform duration-300 ${isFeaturesOpen ? '' : '-rotate-90'}`} />
+                        <span className="text-[11px] font-medium text-[var(--text-sub)] opacity-80 uppercase tracking-wider">功能助手</span>
+                        <ChevronDownIcon className={`w-3 h-3 text-[var(--text-sub)] opacity-60 transition-transform duration-300 ${isFeaturesOpen ? '' : '-rotate-90'}`} />
                     </button>
                     
                     <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${isFeaturesOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
@@ -1196,14 +1186,14 @@ const App = () => {
                                     <button 
                                         key={feature.id}
                                         onClick={() => handleFeatureSelect(feature.prompt)}
-                                        className="group flex items-center gap-3 px-4 py-2.5 rounded-full text-sm text-left hover:bg-[#e1e5ea] transition-all w-full relative overflow-hidden"
+                                        className="group flex items-center gap-3 px-4 py-2.5 rounded-full text-sm text-left hover:bg-[var(--bg-selected)] transition-all w-full relative overflow-hidden"
                                     >
                                         <div className="shrink-0 transition-transform group-hover:scale-110">
                                             {feature.icon}
                                         </div>
                                         <div className="flex flex-col min-w-0">
-                                            <span className="text-[#1f1f1f] font-medium truncate">{feature.name}</span>
-                                            <span className="text-[10px] text-[#444746] opacity-70 truncate">{feature.description}</span>
+                                            <span className="text-[var(--text-main)] font-medium truncate">{feature.name}</span>
+                                            <span className="text-[10px] text-[var(--text-sub)] opacity-70 truncate">{feature.description}</span>
                                         </div>
                                     </button>
                                 ))}
@@ -1216,10 +1206,10 @@ const App = () => {
                   <div>
                     <button 
                         onClick={() => setIsRecentOpen(!isRecentOpen)}
-                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 rounded-lg transition-colors"
+                        className="w-full flex items-center justify-between mb-2 px-4 group py-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition-colors"
                     >
-                        <span className="text-[11px] font-medium text-[#444746] opacity-80 uppercase tracking-wider">最近对话</span>
-                        <ChevronDownIcon className={`w-3 h-3 text-[#444746] opacity-60 transition-transform duration-300 ${isRecentOpen ? '' : '-rotate-90'}`} />
+                        <span className="text-[11px] font-medium text-[var(--text-sub)] opacity-80 uppercase tracking-wider">最近对话</span>
+                        <ChevronDownIcon className={`w-3 h-3 text-[var(--text-sub)] opacity-60 transition-transform duration-300 ${isRecentOpen ? '' : '-rotate-90'}`} />
                     </button>
 
                     <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${isRecentOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
@@ -1229,14 +1219,14 @@ const App = () => {
                                 <button 
                                     key={session.id} 
                                     onClick={() => loadSession(session.id)}
-                                    className={`group flex items-center justify-between gap-3 px-4 py-2.5 rounded-full text-sm text-left truncate transition-colors w-full ${currentSessionId === session.id ? 'bg-[#dfe3e7]' : 'hover:bg-[#e1e5ea] text-[#1f1f1f]'}`}
+                                    className={`group flex items-center justify-between gap-3 px-4 py-2.5 rounded-full text-sm text-left truncate transition-colors w-full ${currentSessionId === session.id ? 'bg-[var(--bg-hover)]' : 'hover:bg-[var(--bg-selected)] text-[var(--text-main)]'}`}
                                 >
                                     <div className="flex items-center gap-3 truncate">
-                                    <HistoryIcon className="text-[#444746] w-[18px] h-[18px]" />
+                                    <HistoryIcon className="text-[var(--text-sub)] w-[18px] h-[18px]" />
                                     <span className="truncate">{session.title}</span>
                                     </div>
                                     <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button onClick={(e) => deleteSession(session.id, e)} className="p-1 rounded-full hover:bg-red-200 text-red-600">
+                                        <button onClick={(e) => deleteSession(session.id, e)} className="p-1 rounded-full hover:bg-red-200 text-red-600 dark:hover:bg-red-900/30 dark:text-red-400">
                                             <DeleteIcon className="w-4 h-4"/>
                                         </button>
                                     </div>
@@ -1251,20 +1241,29 @@ const App = () => {
                 <div className="p-2 mt-auto pb-6 pl-4">
                    <button 
                       onClick={() => setAppStarted(false)}
-                      className="flex items-center gap-3 w-full px-2 py-2.5 hover:bg-[#e1e5ea] rounded-full text-[#1f1f1f] text-sm transition-colors mb-1"
+                      className="flex items-center gap-3 w-full px-2 py-2.5 hover:bg-[var(--bg-selected)] rounded-full text-[var(--text-main)] text-sm transition-colors mb-1"
                    >
-                     <HomeIcon className="w-5 h-5 text-[#444746]" />
+                     <HomeIcon className="w-5 h-5 text-[var(--text-sub)]" />
                      返回首页
                    </button>
-
-                   <button 
-                        className="flex items-center gap-3 w-full px-2 py-2.5 hover:bg-[#e1e5ea] rounded-full text-[#1f1f1f] text-sm transition-colors mb-1 cursor-default opacity-60"
-                   >
-                    <SettingsIcon className="w-5 h-5 text-[#444746]" />
-                    设置
-                  </button>
+                   
+                   <div className="flex items-center gap-1 mb-1">
+                        <button 
+                                className="flex-1 flex items-center gap-3 px-2 py-2.5 hover:bg-[var(--bg-selected)] rounded-full text-[var(--text-main)] text-sm transition-colors cursor-default opacity-60"
+                        >
+                            <SettingsIcon className="w-5 h-5 text-[var(--text-sub)]" />
+                            设置
+                        </button>
+                        <button 
+                            onClick={toggleTheme}
+                            className="p-2.5 hover:bg-[var(--bg-selected)] rounded-full text-[var(--text-sub)] transition-all transform active:scale-95"
+                            title={darkMode ? "切换亮色模式" : "切换暗色模式"}
+                        >
+                            {darkMode ? <LightModeIcon className="w-5 h-5" /> : <DarkModeIcon className="w-5 h-5" />}
+                        </button>
+                   </div>
                   
-                  <div className="px-2 py-2 text-[11px] text-[#444746] flex flex-col gap-2 border-t border-gray-200 pt-3 mt-1">
+                  <div className="px-2 py-2 text-[11px] text-[var(--text-sub)] flex flex-col gap-2 border-t border-[var(--border-main)] pt-3 mt-1">
                     {user ? (
                         <div className="flex items-center justify-between">
                              <div className="flex items-center gap-2">
@@ -1280,7 +1279,7 @@ const App = () => {
                     ) : (
                         <div className="flex items-center gap-2 text-gray-500 italic">
                             <span>访客模式</span>
-                            <button onClick={() => setShowLoginModal(true)} title="登录" className="hover:text-blue-600 transition-colors ml-auto">
+                            <button onClick={() => setShowLoginModal(true)} title="登录" className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors ml-auto">
                                 <LoginIcon className="w-4 h-4" />
                             </button>
                         </div>
@@ -1300,7 +1299,7 @@ const App = () => {
               className={`w-1.5 cursor-col-resize hover:bg-blue-200 transition-colors shrink-0 ${!isSidebarOpen && 'hidden'}`} 
           />
 
-          <main className="flex-1 flex flex-col relative h-full min-w-0 bg-white overflow-hidden">
+          <main className="flex-1 flex flex-col relative h-full min-w-0 bg-[var(--bg-main)] overflow-hidden">
             
             {isSidebarOpen && (
                 <div 
@@ -1309,31 +1308,31 @@ const App = () => {
                 />
             )}
 
-            <header className="flex items-center justify-between p-5 text-[#444746] relative z-40">
+            <header className="flex items-center justify-between p-5 text-[var(--text-sub)] relative z-40">
               <div className="flex items-center gap-3">
                 {!isSidebarOpen && (
-                  <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-[#f0f4f9] rounded-full transition-colors">
+                  <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-[var(--bg-sub)] rounded-full transition-colors">
                     <MenuIcon className="w-6 h-6" />
                   </button>
                 )}
-                <span className="text-xl font-normal text-[#444746] tracking-tight">
+                <span className="text-xl font-normal text-[var(--text-sub)] tracking-tight">
                     MechTeachLearnCenter
                 </span>
                 <div className="relative" ref={modelSelectorRef}>
                   <button 
                     onClick={() => setIsModelSelectorOpen(!isModelSelectorOpen)}
-                    className="flex items-center text-xs font-normal bg-[#f0f4f9] px-3 py-1.5 rounded-full hover:bg-[#dfe3e7] transition-colors text-[#444746]"
+                    className="flex items-center text-xs font-normal bg-[var(--bg-sub)] px-3 py-1.5 rounded-full hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-sub)]"
                   >
                     <span>{selectedModel}</span>
                     <ChevronDownIcon className="w-4 h-4 ml-1 opacity-60" />
                   </button>
                   {isModelSelectorOpen && (
-                    <div className="absolute top-full mt-2 w-72 bg-white/90 backdrop-blur-md rounded-2xl shadow-lg border border-gray-200/50 p-2 z-30 animate-scale-in origin-top-left">
+                    <div className="absolute top-full mt-2 w-72 bg-white/90 dark:bg-[#1e1f20]/90 backdrop-blur-md rounded-2xl shadow-lg border border-[var(--border-main)] p-2 z-30 animate-scale-in origin-top-left">
                       {MODELS.map(model => (
                         <button 
                           key={model} 
                           onClick={() => { setSelectedModel(model); setIsModelSelectorOpen(false); }} 
-                          className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${selectedModel === model ? 'bg-[#e3e8ef] text-black font-medium' : 'hover:bg-[#f0f4f9]'}`}
+                          className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${selectedModel === model ? 'bg-[var(--bg-selected)] text-[var(--text-main)] font-medium' : 'text-[var(--text-main)] hover:bg-[var(--bg-sub)]'}`}
                         >
                           {model}
                         </button>
@@ -1343,7 +1342,7 @@ const App = () => {
                 </div>
               </div>
 
-              <div className="w-9 h-9 rounded-full bg-[#f0f4f9] overflow-hidden ring-2 ring-transparent hover:ring-[#e3e3e3] transition-all cursor-pointer flex items-center justify-center text-[#0b57d0] font-medium text-sm" title={user ? user.name : "Guest"}>
+              <div className="w-9 h-9 rounded-full bg-[var(--bg-sub)] overflow-hidden ring-2 ring-transparent hover:ring-[var(--border-main)] transition-all cursor-pointer flex items-center justify-center text-[#0b57d0] dark:text-blue-300 font-medium text-sm" title={user ? user.name : "Guest"}>
                  {user ? "C" : "S"}
               </div>
             </header>
@@ -1390,7 +1389,7 @@ const App = () => {
                           {msg.images && msg.images.length > 0 && !msg.gradingResult && (
                             <div className={`grid gap-2 max-w-md ${msg.images.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                               {msg.images.map((img, imgIdx) => (
-                                  <div key={imgIdx} className="rounded-3xl overflow-hidden border border-[#e3e3e3] shadow-sm animate-scale-in">
+                                  <div key={imgIdx} className="rounded-3xl overflow-hidden border border-[var(--border-main)] shadow-sm animate-scale-in">
                                       <img src={img} alt={`Upload ${imgIdx}`} className="w-full h-auto" />
                                   </div>
                               ))}
@@ -1403,8 +1402,8 @@ const App = () => {
                           {content && (
                              <div className={`text-[17px] leading-relaxed tracking-wide animate-slide-up-fade ${
                                msg.role === 'user' 
-                                 ? 'whitespace-pre-wrap bg-[#f0f4f9] px-6 py-4 rounded-[24px] rounded-tr-sm text-[#1f1f1f] max-w-[85%]' 
-                                 : 'text-[#1f1f1f] w-full font-normal'
+                                 ? 'whitespace-pre-wrap bg-[var(--bg-sub)] px-6 py-4 rounded-[24px] rounded-tr-sm text-[var(--text-main)] max-w-[85%]' 
+                                 : 'text-[var(--text-main)] w-full font-normal'
                              }`}>
                                {msg.role === 'model' ? <LatexRenderer>{content}</LatexRenderer> : content}
                              </div>
@@ -1422,7 +1421,7 @@ const App = () => {
                           )}
 
                           {msg.isLoading && (
-                             <div className="h-1.5 w-full bg-gradient-to-r from-[#e3e3e3] via-[#c7c7c7] to-[#e3e3e3] rounded-full animate-[shimmer_1.5s_infinite] max-w-[140px]" style={{backgroundSize: '200% 100%'}} />
+                             <div className="h-1.5 w-full bg-gradient-to-r from-[var(--border-main)] via-[var(--bg-hover)] to-[var(--border-main)] rounded-full animate-[shimmer_1.5s_infinite] max-w-[140px]" style={{backgroundSize: '200% 100%'}} />
                           )}
                         </div>
                       </div>
@@ -1434,14 +1433,124 @@ const App = () => {
 
             {/* Bottom Input Box when there are messages */}
             {messages.length > 0 && (
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-4 md:px-[15%] lg:px-[18%] z-30">
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[var(--bg-main)] via-[var(--bg-main)] to-transparent pt-10 pb-8 px-4 md:px-[15%] lg:px-[18%] z-30">
                  {renderInputPanel()}
-                 <p className="text-center text-[12px] text-[#444746] mt-4 opacity-70">
+                 <p className="text-center text-[12px] text-[var(--text-sub)] mt-4 opacity-70">
                     AI 可能会犯错，请务必核实。
                  </p>
               </div>
             )}
           </main>
+      </div>
+
+      {/* MCP Sidebar Overlay */}
+      {isMcpSidebarOpen && (
+        <div 
+            className="fixed inset-0 bg-black/10 backdrop-blur-[1px] z-[60]"
+            onClick={() => setIsMcpSidebarOpen(false)}
+        />
+      )}
+
+      {/* MCP Right Sidebar Drawer */}
+      <div 
+        className={`fixed top-0 right-0 h-full w-[400px] bg-[var(--bg-main)]/95 backdrop-blur-xl border-l border-[var(--border-main)] shadow-2xl z-[70] transform transition-transform duration-300 ease-out flex flex-col ${
+            isMcpSidebarOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-[var(--border-main)] shrink-0">
+             <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white">
+                    <ExtensionIcon className="w-5 h-5" />
+                </div>
+                <div>
+                    <h3 className="text-sm font-bold text-[var(--text-main)] tracking-tight">MCP 扩展中心</h3>
+                    <p className="text-[10px] text-[var(--text-sub)]">Model Context Protocol</p>
+                </div>
+             </div>
+             <button onClick={() => setIsMcpSidebarOpen(false)} className="p-2 hover:bg-[var(--bg-sub)] rounded-full text-[var(--text-sub)] transition-colors">
+                <CloseIcon className="w-5 h-5" />
+             </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+            {/* Status Section */}
+            <div className="mb-6">
+                <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs font-bold text-[var(--text-sub)] uppercase tracking-wider">连接状态</span>
+                    <div className={`px-2 py-0.5 rounded-full text-[10px] font-medium flex items-center gap-1.5 transition-colors duration-300 ${
+                             mcpStatus === 'connected' ? 'bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 
+                             mcpStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-100 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' :
+                             mcpStatus === 'connecting' ? 'bg-yellow-50 text-yellow-700 border border-yellow-100 dark:bg-yellow-900/20 dark:text-yellow-300 dark:border-yellow-800' :
+                             'bg-[var(--bg-sub)] text-[var(--text-sub)] border border-[var(--border-main)]'
+                         }`}>
+                         <div className={`w-1.5 h-1.5 rounded-full ${
+                             mcpStatus === 'connecting' ? 'animate-ping bg-yellow-500' : 
+                             mcpStatus === 'connected' ? 'bg-green-500' : 
+                             mcpStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
+                         }`} />
+                         {mcpStatus === 'connecting' ? '连接中...' : 
+                          mcpStatus === 'connected' ? '已连接' : 
+                          mcpStatus === 'error' ? '连接失败' : '未连接'}
+                    </div>
+                </div>
+
+                <div className="bg-[var(--bg-sub)] p-4 rounded-xl border border-[var(--border-main)]">
+                     <label className="text-[10px] text-[var(--text-sub)] mb-1 block">SSE Endpoint URL</label>
+                     <div className="flex gap-2">
+                         <input 
+                            className="flex-1 bg-[var(--bg-main)] border border-[var(--border-main)] text-xs rounded-lg px-3 py-2 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 text-[var(--text-main)] font-mono transition-all placeholder-gray-400"
+                            value={mcpUrl}
+                            onChange={(e) => setMcpUrl(e.target.value)}
+                            placeholder="e.g. localhost:3000/sse"
+                            disabled={mcpStatus === 'connected' || mcpStatus === 'connecting'}
+                         />
+                     </div>
+                     <button 
+                         onClick={() => handleConnectMcp(mcpStatus === 'connected' ? '' : mcpUrl)}
+                         disabled={mcpStatus === 'connecting'}
+                         className={`mt-3 w-full py-2 rounded-lg text-xs font-semibold transition-all shadow-sm active:scale-95 ${
+                             mcpStatus === 'connected' 
+                             ? 'bg-white text-red-500 border border-red-200 hover:bg-red-50 dark:bg-[#2d2e30] dark:border-red-800 dark:text-red-400' 
+                             : 'bg-[#0052CC] text-white hover:bg-[#0047B3] shadow-blue-200 dark:shadow-blue-900/20'
+                         }`}
+                     >
+                         {mcpStatus === 'connected' ? '断开连接' : '立即连接'}
+                     </button>
+                     
+                     {mcpStatus !== 'connected' && (
+                         <p className="text-[10px] text-[var(--text-sub)] mt-3 leading-relaxed opacity-80">
+                            连接到支持 <strong>MCP (Model Context Protocol)</strong> 的本地或远程服务器，赋予 AI 实时文件读写、数据库查询等扩展能力。
+                         </p>
+                     )}
+                </div>
+            </div>
+
+            {/* Tools Section */}
+            <div>
+                 <div className="flex justify-between items-center mb-3">
+                    <span className="text-xs font-bold text-[var(--text-sub)] uppercase tracking-wider">可用工具 ({mcpTools.length})</span>
+                 </div>
+                 
+                 <div className="flex flex-col gap-3">
+                     {mcpStatus === 'connected' ? (
+                         mcpTools.length > 0 ? (
+                             mcpTools.map(tool => renderMcpToolCard(tool))
+                         ) : (
+                             <div className="flex flex-col items-center justify-center py-10 text-[var(--text-sub)] bg-[var(--bg-sub)] rounded-xl border border-dashed border-[var(--border-main)]">
+                                <ExtensionIcon className="w-8 h-8 mb-2 opacity-20" />
+                                <p className="text-xs">未发现可用工具</p>
+                             </div>
+                         )
+                     ) : (
+                        <div className="text-center py-12 opacity-40">
+                            <ExtensionIcon className="w-12 h-12 mx-auto mb-3 text-[var(--text-sub)]" />
+                            <p className="text-xs text-[var(--text-sub)]">请先连接服务器</p>
+                        </div>
+                     )}
+                 </div>
+            </div>
+        </div>
       </div>
     </div>
   );

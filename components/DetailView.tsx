@@ -39,10 +39,10 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
 
   const getColorClasses = (type: string) => {
     switch (type) {
-      case 'error': return { border: 'border-red-500', bg: 'bg-red-500/20', text: 'text-red-600', cardBorder: 'border-red-200', bgSelected: 'bg-red-50' };
-      case 'praise': return { border: 'border-green-500', bg: 'bg-green-500/20', text: 'text-green-600', cardBorder: 'border-green-200', bgSelected: 'bg-green-50' };
-      case 'suggestion': return { border: 'border-yellow-500', bg: 'bg-yellow-500/20', text: 'text-yellow-600', cardBorder: 'border-yellow-200', bgSelected: 'bg-yellow-50' };
-      default: return { border: 'border-blue-500', bg: 'bg-blue-500/20', text: 'text-blue-600', cardBorder: 'border-blue-200', bgSelected: 'bg-blue-50' };
+      case 'error': return { border: 'border-red-500', bg: 'bg-red-500/20', text: 'text-red-600 dark:text-red-400', cardBorder: 'border-red-200 dark:border-red-900', bgSelected: 'bg-red-50 dark:bg-red-900/10' };
+      case 'praise': return { border: 'border-green-500', bg: 'bg-green-500/20', text: 'text-green-600 dark:text-green-400', cardBorder: 'border-green-200 dark:border-green-900', bgSelected: 'bg-green-50 dark:bg-green-900/10' };
+      case 'suggestion': return { border: 'border-yellow-500', bg: 'bg-yellow-500/20', text: 'text-yellow-600 dark:text-yellow-400', cardBorder: 'border-yellow-200 dark:border-yellow-900', bgSelected: 'bg-yellow-50 dark:bg-yellow-900/10' };
+      default: return { border: 'border-blue-500', bg: 'bg-blue-500/20', text: 'text-blue-600 dark:text-blue-400', cardBorder: 'border-blue-200 dark:border-blue-900', bgSelected: 'bg-blue-50 dark:bg-blue-900/10' };
     }
   };
 
@@ -65,20 +65,20 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-white flex flex-col animate-scale-in">
+    <div className="fixed inset-0 z-50 bg-[var(--bg-main)] flex flex-col animate-scale-in">
       {/* Header */}
-      <div className="h-16 border-b border-[#e3e3e3] flex items-center justify-between px-6 bg-white shrink-0 z-20 relative shadow-sm">
+      <div className="h-16 border-b border-[var(--border-main)] flex items-center justify-between px-6 bg-[var(--bg-main)] shrink-0 z-20 relative shadow-sm">
         <div className="flex items-center gap-3">
-            <button onClick={onClose} className="p-2 -ml-2 hover:bg-[#f0f4f9] rounded-full transition-colors text-[#444746]">
+            <button onClick={onClose} className="p-2 -ml-2 hover:bg-[var(--bg-sub)] rounded-full transition-colors text-[var(--text-sub)]">
                 <ArrowBackIcon />
             </button>
-            <h2 className="text-lg font-medium text-[#1f1f1f]">批改详情</h2>
+            <h2 className="text-lg font-medium text-[var(--text-main)]">批改详情</h2>
         </div>
         <div className="flex gap-2">
-             <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-red-100 text-red-700">
+             <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
                 {gradingResponse.annotations.filter(a => a.type === 'error').length} 处错误
              </span>
-             <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-green-100 text-green-700">
+             <span className="text-xs font-medium px-3 py-1.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
                 {gradingResponse.annotations.filter(a => a.type === 'praise').length} 处优秀
              </span>
         </div>
@@ -86,10 +86,10 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Image Stage (Scrollable) */}
-        <div className="flex-1 bg-[#f0f4f9] p-8 overflow-y-auto relative flex flex-col items-center gap-8" onClick={() => setSelectedId(null)}>
+        <div className="flex-1 bg-[var(--bg-sub)] p-8 overflow-y-auto relative flex flex-col items-center gap-8" onClick={() => setSelectedId(null)}>
              
              {images.map((imgSrc, imgIndex) => (
-                 <div key={imgIndex} className="relative w-full max-w-4xl shadow-lg rounded-lg overflow-hidden bg-white select-none shrink-0">
+                 <div key={imgIndex} className="relative w-full max-w-4xl shadow-lg rounded-lg overflow-hidden bg-white dark:bg-[#2d2e30] select-none shrink-0 border border-[var(--border-main)]">
                     <img 
                         src={imgSrc} 
                         alt={`Page ${imgIndex + 1}`} 
@@ -118,14 +118,14 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
                                     className={`absolute cursor-pointer transition-all duration-200 border-2
                                         ${colors.border} 
                                         ${isSelected 
-                                            ? 'bg-transparent ring-4 ring-white/70 shadow-lg z-20' 
+                                            ? 'bg-transparent ring-4 ring-white/70 dark:ring-black/50 shadow-lg z-20' 
                                             : `${colors.bg} opacity-60 hover:opacity-100 z-10`
                                         }
                                     `}
                                     style={getStyleForBox(item.box_2d)}
                                 >
                                     {isSelected && (
-                                        <div className={`absolute -top-3 -right-3 w-6 h-6 rounded-full ${colors.bg.replace('/20', '')} border-2 border-white flex items-center justify-center shadow-sm`}>
+                                        <div className={`absolute -top-3 -right-3 w-6 h-6 rounded-full ${colors.bg.replace('/20', '')} border-2 border-white dark:border-gray-800 flex items-center justify-center shadow-sm`}>
                                             {renderOverlayIcon(item.type, `w-3.5 h-3.5 ${colors.text} font-bold`)}
                                         </div>
                                     )}
@@ -138,18 +138,18 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
         </div>
 
         {/* Right: Sidebar List */}
-        <div className="w-[400px] border-l border-[#e3e3e3] bg-white flex flex-col shrink-0 shadow-xl z-20">
+        <div className="w-[400px] border-l border-[var(--border-main)] bg-[var(--bg-main)] flex flex-col shrink-0 shadow-xl z-20">
              <div className="flex-1 overflow-y-auto p-6">
                 <div className="mb-8">
-                    <h3 className="text-xs font-bold text-[#444746] uppercase tracking-wider mb-3">总评</h3>
-                    <div className="p-4 bg-[#f8f9fa] rounded-xl text-[#1f1f1f] text-sm leading-relaxed border border-[#e3e3e3]">
+                    <h3 className="text-xs font-bold text-[var(--text-sub)] uppercase tracking-wider mb-3">总评</h3>
+                    <div className="p-4 bg-[var(--bg-sub)] rounded-xl text-[var(--text-main)] text-sm leading-relaxed border border-[var(--border-main)]">
                         <LatexRenderer>{gradingResponse.summary}</LatexRenderer>
                     </div>
                 </div>
                 
-                <h3 className="text-xs font-bold text-[#444746] uppercase tracking-wider mb-4 flex items-center justify-between">
+                <h3 className="text-xs font-bold text-[var(--text-sub)] uppercase tracking-wider mb-4 flex items-center justify-between">
                     详细批注
-                    <span className="text-[10px] bg-[#f0f4f9] px-2 py-0.5 rounded-full text-[#444746]">{gradingResponse.annotations.length}</span>
+                    <span className="text-[10px] bg-[var(--bg-sub)] px-2 py-0.5 rounded-full text-[var(--text-sub)]">{gradingResponse.annotations.length}</span>
                 </h3>
                 
                 <div className="flex flex-col gap-3 pb-10">
@@ -163,8 +163,8 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
                                 onClick={() => setSelectedId(item.id)}
                                 className={`group p-4 rounded-xl border transition-all duration-200 cursor-pointer relative
                                     ${isSelected 
-                                        ? `${colors.cardBorder} ${colors.bgSelected} shadow-md ring-1 ring-offset-0 ${colors.border.replace('border-', 'ring-').replace('-500', '-200')}` 
-                                        : 'border-[#e3e3e3] hover:border-[#c7c7c7] hover:bg-[#f8f9fa]'
+                                        ? `${colors.cardBorder} ${colors.bgSelected} shadow-md ring-1 ring-offset-0 ${colors.border.replace('border-', 'ring-').replace('-500', '-200')} dark:ring-offset-[#131314]` 
+                                        : 'border-[var(--border-main)] hover:border-[#c7c7c7] dark:hover:border-gray-600 hover:bg-[var(--bg-sub)]'
                                     }
                                 `}
                             >
@@ -182,18 +182,18 @@ const DetailView: React.FC<DetailViewProps> = ({ images, gradingResponse, onClos
                                               onQuote(item.details);
                                               onClose();
                                           }}
-                                          className="p-1.5 rounded-full text-gray-400 hover:bg-gray-200/70 hover:text-black opacity-0 group-hover:opacity-100 transition-opacity"
+                                          className="p-1.5 rounded-full text-gray-400 hover:bg-gray-200/70 hover:text-black dark:hover:bg-gray-700 dark:hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
                                           title="引用此条"
                                       >
                                           <ReplyIcon className="w-4 h-4" />
                                       </button>
-                                      <span className="text-[10px] text-gray-400 border px-1 rounded">P.{item.imageIndex + 1}</span>
+                                      <span className="text-[10px] text-gray-400 border border-gray-200 dark:border-gray-700 px-1 rounded">P.{item.imageIndex + 1}</span>
                                     </div>
                                 </div>
-                                <div className={`font-medium text-[15px] mb-1 ${isSelected ? 'text-black' : 'text-[#1f1f1f]'}`}>
+                                <div className={`font-medium text-[15px] mb-1 ${isSelected ? 'text-[var(--text-main)]' : 'text-[var(--text-main)]'}`}>
                                     {item.label}
                                 </div>
-                                <div className={`text-sm leading-relaxed ${isSelected ? 'text-[#1f1f1f]' : 'text-[#444746]'}`}>
+                                <div className={`text-sm leading-relaxed ${isSelected ? 'text-[var(--text-main)]' : 'text-[var(--text-sub)]'}`}>
                                     <LatexRenderer>{item.details}</LatexRenderer>
                                 </div>
                             </div>
