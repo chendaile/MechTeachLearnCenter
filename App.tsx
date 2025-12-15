@@ -503,7 +503,7 @@ const EntryPage = ({ onStart, onLogin, darkMode, toggleTheme }: { onStart: () =>
 
       <InteractiveParticles />
       <div className="relative z-10 p-8 flex flex-col items-center">
-        <h1 className="entry-title">MechTeachLearnCenter</h1>
+        <h1 className="entry-title">MechHub</h1>
         <p className="entry-tagline">
           释放 AI 的力量，开启知识之门。您的个性化 AI 学习伙伴。
         </p>
@@ -1316,7 +1316,7 @@ const App = () => {
                   </button>
                 )}
                 <span className="text-xl font-normal text-[var(--text-sub)] tracking-tight">
-                    MechTeachLearnCenter
+                    MechHub
                 </span>
                 <div className="relative" ref={modelSelectorRef}>
                   <button 
